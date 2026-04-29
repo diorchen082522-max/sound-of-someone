@@ -1,4 +1,1131 @@
 <!DOCTYPE html>
+<!--
+  ============================================================
+  GLASSES BLINK
+  A Sound of Someone project by Ziya
+  Single-file website: HTML + CSS + JavaScript + documentation
+  ============================================================
+
+  CONCEPT
+  Glasses Blink turns the sound of glassware — the kind we hear
+  every day, almost without noticing — into music. Four families
+  of glass (wine, tumbler, flute, crystal), each with its own
+  inharmonic timbre, can be tapped, held, swept, and re-poured
+  in real time. Eight glasses are tuned to a C major pentatonic
+  scale, so any combination of notes sounds harmonious.
+
+  HOW TO PLAY
+    - Click any glass to tap it (short ring).
+    - Hold to sustain the tone (like a wet finger on a rim).
+    - Drag across the row while holding to play a glissando.
+    - Keys A S D F G H J K map to the eight glasses.
+    - Switch glass family with the Wine / Tumbler / Flute /
+      Crystal tabs at the top.
+    - Toggle Tune mode to drag a glass up or down to retune it.
+    - Record / Play Loop / Clear capture and replay phrases.
+
+  TECHNICAL NOTES
+    - Sound: Web Audio API. Per-note inharmonic synthesis using
+      4–5 sine partials at glass-specific ratios; tap envelope
+      uses exponential decay (1.8s tumbler → 6.5s crystal);
+      sustain envelope adds vibrato (~5 Hz, ~5 cents) and a
+      0.6s release. A 2.4s algorithmic reverb adds room ambience.
+    - Tuning: pitch = 220 · 2^((100 - waterLevel) / 50).
+    - Visuals: pure HTML/CSS, no images. Each glass family has
+      its own silhouette and glow color.
+    - Recording stores the glass family on each event so loops
+      replay across the correct families.
+
+  Click the small "?" in the top-right while running for the
+  in-page about panel.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Glasses Blink</title>
+<style>
+  /* ============================================================
+     GLOBAL
+     ============================================================ */
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body { height: 100%; }
+
+  body {
+    font-family: 'Cormorant Garamond', 'Georgia', serif;
+    background: radial-gradient(ellipse at center, #1c1d2e 0%, #08080f 100%);
+    color: #f0e9d2;
+    overflow-x: hidden;
+    overflow-y: auto;
+    min-height: 100vh;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* ============================================================
+     AMBIENT BACKGROUND
+     ============================================================ */
+  .ambient {
+    position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background:
+      radial-gradient(circle at 18% 28%, rgba(255, 200, 150, 0.06), transparent 45%),
+      radial-gradient(circle at 82% 72%, rgba(150, 200, 255, 0.06), transparent 45%);
+  }
+
+  .stars { position: fixed; inset: 0; pointer-events: none; z-index: 0; opacity: 0.35; }
+  .stars span {
+    position: absolute; width: 2px; height: 2px;
+    border-radius: 50%; background: #fff;
+    animation: twinkle 3s infinite ease-in-out;
+  }
+  @keyframes twinkle {
+    0%, 100% { opacity: 0.2; }
+    50%      { opacity: 0.9; }
+  }
+
+  /* ============================================================
+     LAYOUT
+     ============================================================ */
+  .container {
+    position: relative; z-index: 1;
+    min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 30px 20px 80px;
+  }
+
+  h1 {
+    font-size: 3.4rem;
+    font-weight: 300;
+    letter-spacing: 0.4em;
+    margin-bottom: 4px;
+    background: linear-gradient(180deg, #f5ecd0 0%, #b09d7a 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    text-align: center;
+  }
+
+  .subtitle {
+    font-style: italic;
+    opacity: 0.65;
+    margin-bottom: 22px;
+    font-size: 0.95rem;
+    letter-spacing: 0.05em;
+  }
+
+  /* ============================================================
+     TABS (glass family)
+     ============================================================ */
+  .tabs {
+    display: flex; gap: 4px; margin-bottom: 18px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 999px;
+    padding: 4px;
+  }
+  .tab {
+    background: transparent; border: none; color: #f0e9d2;
+    padding: 8px 18px;
+    font-family: inherit; font-size: 0.78rem;
+    letter-spacing: 0.25em;
+    cursor: pointer; text-transform: uppercase;
+    border-radius: 999px;
+    transition: all 0.25s ease;
+    opacity: 0.55;
+  }
+  .tab:hover { opacity: 0.85; }
+  .tab.active {
+    background: rgba(255, 230, 180, 0.15);
+    opacity: 1;
+    box-shadow: inset 0 0 0 1px rgba(255, 230, 180, 0.35);
+  }
+
+  /* ============================================================
+     MODE TOGGLE (play / tune)
+     ============================================================ */
+  .mode-row {
+    display: flex; gap: 8px; align-items: center;
+    margin-bottom: 12px;
+    font-size: 0.7rem; letter-spacing: 0.3em;
+    text-transform: uppercase; opacity: 0.85;
+  }
+  .mode-pill {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.18);
+    color: #f0e9d2;
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-family: inherit; font-size: 0.7rem;
+    letter-spacing: 0.25em;
+    cursor: pointer; text-transform: uppercase;
+    transition: all 0.2s ease;
+  }
+  .mode-pill:hover { background: rgba(255,255,255,0.08); }
+  .mode-pill.active {
+    background: rgba(255, 230, 180, 0.18);
+    border-color: rgba(255, 230, 180, 0.55);
+    color: #fff5dc;
+  }
+
+  .hint {
+    font-size: 0.7rem; opacity: 0.4;
+    margin-bottom: 24px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    text-align: center;
+    height: 14px;
+  }
+
+  /* ============================================================
+     GLASS SHELF + GLASSES
+     ============================================================ */
+  .glass-row {
+    display: flex; align-items: flex-end; justify-content: center;
+    gap: 22px; margin-bottom: 30px; flex-wrap: wrap;
+    min-height: 240px;
+  }
+
+  .glass {
+    position: relative;
+    cursor: pointer;
+    transition: transform 0.15s ease;
+    animation: float 6s infinite ease-in-out;
+    touch-action: none;
+  }
+  .glass:hover { transform: translateY(-6px); }
+  body.tune-mode .glass:hover { transform: none; cursor: ns-resize; }
+
+  .glass:nth-child(2) { animation-delay: -0.5s; }
+  .glass:nth-child(3) { animation-delay: -1s;   }
+  .glass:nth-child(4) { animation-delay: -1.5s; }
+  .glass:nth-child(5) { animation-delay: -2s;   }
+  .glass:nth-child(6) { animation-delay: -2.5s; }
+  .glass:nth-child(7) { animation-delay: -3s;   }
+  .glass:nth-child(8) { animation-delay: -3.5s; }
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-3px); }
+  }
+
+  .bowl {
+    position: relative;
+    background: linear-gradient(180deg,
+      rgba(255, 255, 255, 0.15) 0%,
+      rgba(255, 255, 255, 0.04) 40%,
+      rgba(255, 255, 255, 0.10) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    overflow: hidden;
+    transition: box-shadow 0.5s ease, border-color 0.5s ease;
+    backdrop-filter: blur(2px);
+  }
+  .bowl::before {
+    content: '';
+    position: absolute;
+    top: 8px; left: 8px;
+    width: 8px; height: 30px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.5), transparent);
+    border-radius: 50%;
+    pointer-events: none;
+  }
+
+  .water {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: linear-gradient(180deg,
+      rgba(120, 200, 255, 0.45) 0%,
+      rgba(70, 140, 200, 0.65) 100%);
+    border-top: 1px solid rgba(255, 255, 255, 0.5);
+    transition: height 0.05s linear;
+    pointer-events: none;
+  }
+
+  .glass.playing .water { animation: ripple 0.6s ease-out; }
+  @keyframes ripple {
+    0%   { transform: scaleY(1); }
+    30%  { transform: scaleY(1.06); }
+    100% { transform: scaleY(1); }
+  }
+
+  .stem {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    background: linear-gradient(90deg,
+      rgba(255,255,255,0.1),
+      rgba(255,255,255,0.35),
+      rgba(255,255,255,0.1));
+  }
+
+  .base {
+    position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
+    background: radial-gradient(ellipse at center, rgba(255,255,255,0.35), rgba(255,255,255,0.1));
+    border-radius: 50%;
+  }
+
+  /* ---- glass-type silhouettes ---- */
+  .glass.wine { width: 64px; height: 200px; }
+  .glass.wine .bowl {
+    top: 0; left: 4px; right: 4px;
+    height: 130px;
+    border-bottom-left-radius: 50% 35%;
+    border-bottom-right-radius: 50% 35%;
+  }
+  .glass.wine .stem { top: 130px; width: 3px; height: 50px; }
+  .glass.wine .base { width: 42px; height: 6px; }
+
+  .glass.tumbler { width: 70px; height: 140px; }
+  .glass.tumbler .bowl {
+    top: 0; left: 4px; right: 4px;
+    height: 130px;
+    border-radius: 6px 6px 14px 14px;
+    border-bottom: 2px solid rgba(255,255,255,0.4);
+  }
+  .glass.tumbler .stem { display: none; }
+  .glass.tumbler .base { width: 56px; height: 4px; }
+
+  .glass.flute { width: 44px; height: 230px; }
+  .glass.flute .bowl {
+    top: 0; left: 6px; right: 6px;
+    height: 150px;
+    border-radius: 50% 50% 30% 30% / 20% 20% 30% 30%;
+  }
+  .glass.flute .stem { top: 150px; width: 2.5px; height: 60px; }
+  .glass.flute .base { width: 32px; height: 5px; }
+
+  .glass.crystal { width: 72px; height: 210px; }
+  .glass.crystal .bowl {
+    top: 0; left: 4px; right: 4px;
+    height: 140px;
+    border-radius: 40% 40% 50% 50% / 25% 25% 60% 60%;
+    background:
+      linear-gradient(115deg, transparent 30%, rgba(255,255,255,0.18) 35%, transparent 40%),
+      linear-gradient(180deg,
+        rgba(255, 255, 255, 0.18) 0%,
+        rgba(255, 255, 255, 0.05) 40%,
+        rgba(255, 255, 255, 0.13) 100%);
+    border-color: rgba(255,255,255,0.4);
+  }
+  .glass.crystal .stem { top: 140px; width: 4px; height: 55px; }
+  .glass.crystal .base { width: 50px; height: 7px; }
+
+  /* glow when playing — color tinted by glass type */
+  .glass.playing .bowl {
+    box-shadow:
+      0 0 40px 8px var(--glow, rgba(255, 230, 180, 0.7)),
+      0 0 80px 20px var(--glow-soft, rgba(255, 200, 140, 0.3)),
+      inset 0 0 25px var(--glow-inner, rgba(255, 230, 180, 0.5));
+    border-color: var(--glow, rgba(255, 230, 180, 0.9));
+  }
+
+  .key-label {
+    position: absolute; bottom: -28px; left: 50%; transform: translateX(-50%);
+    font-size: 0.7rem; opacity: 0.45;
+    letter-spacing: 0.3em;
+    font-family: 'Courier New', monospace;
+  }
+  .freq-label {
+    position: absolute; top: -22px; left: 50%; transform: translateX(-50%);
+    font-size: 0.65rem; opacity: 0;
+    font-family: 'Courier New', monospace;
+    letter-spacing: 0.1em;
+    transition: opacity 0.2s ease;
+    white-space: nowrap;
+  }
+  body.tune-mode .freq-label,
+  .glass.playing .freq-label { opacity: 0.7; }
+
+  /* ============================================================
+     CONTROLS
+     ============================================================ */
+  .controls {
+    display: flex; gap: 12px; margin-top: 8px; flex-wrap: wrap;
+    justify-content: center; align-items: center;
+  }
+  button.ctrl {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #f0e9d2;
+    padding: 10px 22px;
+    font-family: inherit; font-size: 0.78rem;
+    letter-spacing: 0.3em;
+    cursor: pointer; transition: all 0.2s ease;
+    border-radius: 1px;
+    text-transform: uppercase;
+  }
+  button.ctrl:hover {
+    background: rgba(255, 255, 255, 0.09);
+    border-color: rgba(255, 255, 255, 0.4);
+    transform: translateY(-1px);
+  }
+  button.ctrl.recording {
+    background: rgba(255, 90, 90, 0.18);
+    border-color: rgba(255, 90, 90, 0.6);
+    color: #ffd0d0;
+    animation: pulse-red 1.2s infinite;
+  }
+  button.ctrl.looping {
+    background: rgba(150, 220, 170, 0.15);
+    border-color: rgba(150, 220, 170, 0.55);
+    color: #d0ffd8;
+  }
+  @keyframes pulse-red {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.55; }
+  }
+
+  .vol-wrap {
+    display: flex; align-items: center; gap: 10px;
+    color: #f0e9d2; opacity: 0.7;
+    font-size: 0.7rem; letter-spacing: 0.3em;
+    text-transform: uppercase;
+  }
+  .vol-wrap input[type="range"] {
+    -webkit-appearance: none; appearance: none;
+    width: 100px; height: 2px;
+    background: rgba(255,255,255,0.2);
+    outline: none; cursor: pointer;
+  }
+  .vol-wrap input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 12px; height: 12px;
+    border-radius: 50%; background: #f0e9d2; cursor: pointer;
+  }
+  .vol-wrap input[type="range"]::-moz-range-thumb {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: #f0e9d2; cursor: pointer; border: none;
+  }
+
+  /* ============================================================
+     ABOUT PANEL (in-page documentation)
+     ============================================================ */
+  .about-btn {
+    position: fixed; top: 16px; right: 16px;
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.2);
+    color: #f0e9d2;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 1rem;
+    z-index: 5;
+    transition: all 0.2s ease;
+  }
+  .about-btn:hover {
+    background: rgba(255,255,255,0.12);
+    border-color: rgba(255,255,255,0.5);
+  }
+
+  .about-overlay {
+    position: fixed; inset: 0; z-index: 10;
+    background: rgba(8,8,15,0.85);
+    backdrop-filter: blur(4px);
+    display: none;
+    align-items: center; justify-content: center;
+    padding: 30px;
+    animation: fade-in 0.3s ease;
+  }
+  .about-overlay.open { display: flex; }
+  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+  .about-panel {
+    background: linear-gradient(180deg, #1a1a2a, #10101a);
+    border: 1px solid rgba(255,230,180,0.25);
+    color: #f0e9d2;
+    max-width: 700px; width: 100%;
+    max-height: 85vh;
+    overflow-y: auto;
+    padding: 40px 44px;
+    border-radius: 4px;
+    font-size: 0.95rem;
+    line-height: 1.7;
+    position: relative;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  }
+  .about-panel h2 {
+    font-weight: 300;
+    letter-spacing: 0.3em;
+    font-size: 1.6rem;
+    margin-bottom: 6px;
+    background: linear-gradient(180deg, #f5ecd0 0%, #b09d7a 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .about-panel h3 {
+    font-weight: 300;
+    font-size: 1rem;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: #d8c89e;
+    margin-top: 24px;
+    margin-bottom: 10px;
+  }
+  .about-panel p { margin-bottom: 14px; opacity: 0.88; }
+  .about-panel ul { margin: 10px 0 14px 22px; opacity: 0.88; }
+  .about-panel li { margin-bottom: 6px; }
+  .about-panel em { color: #f5ecd0; font-style: italic; }
+  .about-panel .meta {
+    font-style: italic; opacity: 0.55;
+    margin-bottom: 22px;
+    font-size: 0.85rem;
+    letter-spacing: 0.05em;
+  }
+  .about-close {
+    position: absolute; top: 16px; right: 18px;
+    background: none; border: none;
+    color: #f0e9d2; opacity: 0.5;
+    cursor: pointer; font-size: 1.4rem;
+    padding: 4px 10px;
+  }
+  .about-close:hover { opacity: 1; }
+
+  /* ============================================================
+     MISC
+     ============================================================ */
+  .footer {
+    position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+    font-size: 0.65rem; opacity: 0.3;
+    letter-spacing: 0.4em; text-transform: uppercase;
+    z-index: 1;
+  }
+
+  .blink-orb {
+    position: fixed;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: rgba(255, 230, 180, 0.9);
+    box-shadow: 0 0 20px 4px rgba(255, 230, 180, 0.6);
+    pointer-events: none;
+    z-index: 2;
+    animation: float-up 2s ease-out forwards;
+  }
+  @keyframes float-up {
+    0%   { transform: translateY(0);     opacity: 1; }
+    100% { transform: translateY(-200px); opacity: 0; }
+  }
+
+  body.tune-mode .glass { cursor: ns-resize; }
+  body.tune-mode .water { cursor: ns-resize; }
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     BACKGROUND LAYERS
+     ============================================================ -->
+<div class="ambient"></div>
+<div class="stars" id="stars"></div>
+
+<!-- ============================================================
+     ABOUT BUTTON (top-right)
+     ============================================================ -->
+<button class="about-btn" id="aboutBtn" title="About this project">?</button>
+
+<!-- ============================================================
+     MAIN UI
+     ============================================================ -->
+<div class="container">
+  <h1>GLASSES&nbsp;BLINK</h1>
+  <p class="subtitle">the music hidden in everyday glass</p>
+
+  <div class="tabs" id="tabs">
+    <button class="tab active" data-type="wine">Wine</button>
+    <button class="tab" data-type="tumbler">Tumbler</button>
+    <button class="tab" data-type="flute">Flute</button>
+    <button class="tab" data-type="crystal">Crystal</button>
+  </div>
+
+  <div class="mode-row">
+    <button class="mode-pill active" id="playMode">Play</button>
+    <button class="mode-pill" id="tuneMode">Tune</button>
+  </div>
+
+  <p class="hint" id="hint">tap a glass · hold to ring · drag across to glissando · keys A–K</p>
+
+  <div class="glass-row" id="glassRow"></div>
+
+  <div class="controls">
+    <button class="ctrl" id="recordBtn">Record</button>
+    <button class="ctrl" id="playBtn">Play Loop</button>
+    <button class="ctrl" id="clearBtn">Clear</button>
+    <div class="vol-wrap">
+      <span>Vol</span>
+      <input type="range" id="volSlider" min="0" max="100" value="70">
+    </div>
+  </div>
+</div>
+
+<div class="footer">a sound of someone project</div>
+
+<!-- ============================================================
+     ABOUT OVERLAY (in-page documentation)
+     ============================================================ -->
+<div class="about-overlay" id="aboutOverlay">
+  <div class="about-panel">
+    <button class="about-close" id="aboutClose">×</button>
+    <h2>GLASSES BLINK</h2>
+    <p class="meta">A Sound of Someone project by Ziya</p>
+
+    <h3>Concept</h3>
+    <p><em>Glasses Blink</em> turns the sound of glassware — the kind we hear every day, almost without noticing — into music. A toast at dinner, the chime of a glass set down on a counter, a fingertip tracing the rim of a wine goblet: tiny acoustic events most of us treat as background noise. The project asks what happens when we treat them as instruments instead.</p>
+    <p>Four families of glass — wine, tumbler, champagne flute, and crystal goblet — each modeled with the actual inharmonic partials its real-world counterpart produces. Visitors can tap a glass for a single bell-like note, hold it down to ring it like a wet finger on a rim, sweep across the row for a glissando, or enter Tune mode and re-pour each glass to retune the whole instrument live.</p>
+    <p>Every glass is tuned to a note in the C major pentatonic scale. Pentatonic was chosen deliberately: every combination of notes sounds harmonious, so anyone who visits the site can make music without knowing music theory.</p>
+
+    <h3>Inspiration</h3>
+    <p>The starting point was the <em>glass harmonica</em>, the 18th-century instrument invented by Benjamin Franklin in which rotating glass bowls of different sizes are played by touching wet fingers to their rims. Composers from Mozart to Saint-Saëns wrote for it — its tone was famously described as almost unsettlingly beautiful.</p>
+    <p>I was also influenced by the kitchen — the sound of a glass set on a marble counter, the high ring of stemware in a dishwasher, the way a glass of water on a passenger-seat cup holder hums at exactly one pitch when the car hits a certain speed. Tones you could write a song with, if you noticed them.</p>
+
+    <h3>How to play</h3>
+    <ul>
+      <li><strong>Tabs</strong>: switch between Wine / Tumbler / Flute / Crystal — each plays a different timbre.</li>
+      <li><strong>Click</strong> a glass for a single tap.</li>
+      <li><strong>Hold</strong> to sustain — like rubbing a wet finger around the rim.</li>
+      <li><strong>Drag across</strong> the row while holding to play a glissando.</li>
+      <li><strong>Keys A S D F G H J K</strong> map to the eight glasses.</li>
+      <li><strong>Tune mode</strong>: drag a glass up or down to change its water level and pitch.</li>
+      <li><strong>Record / Play Loop / Clear</strong>: capture a phrase and have the page play it back.</li>
+    </ul>
+
+    <h3>Reflection</h3>
+    <p>What I didn't expect was how much the <em>silence between notes</em> mattered. With a long-decay sound, two notes played one second apart blur into a chord; played four seconds apart, they're two distinct events. A row of glasses turns out to be a surprisingly expressive instrument once you stop trying to play it like a piano and start treating it like punctuation.</p>
+    <p>Adding multiple glass types changed what the site invited. Wine glasses tend toward slow, contemplative phrases. Tumblers are percussive — short, mellow thuds that work as a rhythm bed. Recording a tumbler ostinato underneath a slow crystal melody felt like discovering the project had a band.</p>
+
+    <h3>Technical notes</h3>
+    <ul>
+      <li><strong>Sound</strong>: Web Audio API. Per-note inharmonic synthesis using 4–5 sine partials at glass-specific ratios; tap envelope uses exponential decay (1.8s tumbler → 6.5s crystal); sustain envelope adds vibrato (~5 Hz, ~5 cents) and a 0.6s release. A 2.4s algorithmic reverb adds room ambience.</li>
+      <li><strong>Tuning</strong>: pitch is computed live from water level using <code>freq = 220 · 2^((100 − level) / 50)</code>.</li>
+      <li><strong>Visuals</strong>: pure HTML/CSS, no images. Each glass family has its own silhouette and glow color.</li>
+      <li><strong>Recording</strong> stores the glass family on each event so loops replay across the correct families.</li>
+      <li>No external libraries — single self-contained HTML file.</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+  /* ============================================================
+     GLASS TYPES — timbre, decay, glow color, pitch shift
+     ============================================================ */
+  const glassTypes = {
+    wine: {
+      name: 'Wine',
+      partials: [
+        { mult: 1.00, gain: 0.55 },
+        { mult: 2.76, gain: 0.32 },
+        { mult: 5.40, gain: 0.16 },
+        { mult: 8.93, gain: 0.07 }
+      ],
+      decay: 4.5,
+      glow: 'rgba(255, 230, 180, 0.7)',
+      glowSoft: 'rgba(255, 200, 140, 0.3)',
+      glowInner: 'rgba(255, 230, 180, 0.5)',
+      orbColor: 'rgba(255, 230, 180, 0.9)',
+      pitchShift: 0
+    },
+    tumbler: {
+      name: 'Tumbler',
+      partials: [
+        { mult: 1.00, gain: 0.65 },
+        { mult: 2.40, gain: 0.22 },
+        { mult: 4.50, gain: 0.10 },
+        { mult: 6.80, gain: 0.04 }
+      ],
+      decay: 1.8,
+      glow: 'rgba(160, 220, 255, 0.7)',
+      glowSoft: 'rgba(120, 180, 255, 0.3)',
+      glowInner: 'rgba(160, 220, 255, 0.5)',
+      orbColor: 'rgba(160, 220, 255, 0.9)',
+      pitchShift: -0.5
+    },
+    flute: {
+      name: 'Flute',
+      partials: [
+        { mult: 1.00, gain: 0.45 },
+        { mult: 3.00, gain: 0.35 },
+        { mult: 5.80, gain: 0.20 },
+        { mult: 9.50, gain: 0.10 }
+      ],
+      decay: 5.5,
+      glow: 'rgba(255, 200, 230, 0.7)',
+      glowSoft: 'rgba(255, 170, 220, 0.3)',
+      glowInner: 'rgba(255, 200, 230, 0.5)',
+      orbColor: 'rgba(255, 200, 230, 0.9)',
+      pitchShift: 0.5
+    },
+    crystal: {
+      name: 'Crystal',
+      partials: [
+        { mult: 1.00,  gain: 0.45 },
+        { mult: 2.76,  gain: 0.30 },
+        { mult: 5.40,  gain: 0.20 },
+        { mult: 8.93,  gain: 0.12 },
+        { mult: 12.50, gain: 0.06 }
+      ],
+      decay: 6.5,
+      glow: 'rgba(220, 255, 255, 0.8)',
+      glowSoft: 'rgba(200, 240, 255, 0.35)',
+      glowInner: 'rgba(220, 255, 255, 0.55)',
+      orbColor: 'rgba(220, 255, 255, 0.95)',
+      pitchShift: 0
+    }
+  };
+
+  /* ============================================================
+     PITCH MAPPING — water level <-> frequency
+     ============================================================ */
+  const targetFreqs = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 587.33, 659.25];
+  function freqToWaterLevel(freq) { return 100 - 50 * Math.log2(freq / 220); }
+  function waterLevelToFreq(lvl)  { return 220 * Math.pow(2, (100 - lvl) / 50); }
+
+  const keys = ['A','S','D','F','G','H','J','K'];
+  const glasses = targetFreqs.map((f, i) => ({
+    waterLevel: freqToWaterLevel(f),
+    key: keys[i]
+  }));
+
+  /* ============================================================
+     AUDIO ENGINE
+     ============================================================ */
+  let audioCtx = null;
+  let masterBus = null;
+  let reverbNode = null;
+  let masterVolume = 0.7;
+
+  function initAudio() {
+    if (audioCtx) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    // Algorithmic reverb impulse
+    const len = audioCtx.sampleRate * 2.4;
+    const impulse = audioCtx.createBuffer(2, len, audioCtx.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const data = impulse.getChannelData(ch);
+      for (let i = 0; i < len; i++) {
+        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.5);
+      }
+    }
+    reverbNode = audioCtx.createConvolver();
+    reverbNode.buffer = impulse;
+
+    const reverbGain = audioCtx.createGain();
+    reverbGain.gain.value = 0.35;
+
+    masterBus = audioCtx.createGain();
+    masterBus.gain.value = masterVolume;
+
+    masterBus.connect(audioCtx.destination);
+    masterBus.connect(reverbNode);
+    reverbNode.connect(reverbGain);
+    reverbGain.connect(audioCtx.destination);
+  }
+
+  // Tap (struck rim) — natural exponential decay
+  function playTap(freq, type) {
+    initAudio();
+    const cfg = glassTypes[type];
+    const ac = audioCtx;
+    const now = ac.currentTime;
+    const f = freq * Math.pow(2, cfg.pitchShift / 12);
+
+    const env = ac.createGain();
+    env.gain.setValueAtTime(0, now);
+    env.gain.linearRampToValueAtTime(0.45, now + 0.005);
+    env.gain.exponentialRampToValueAtTime(0.001, now + cfg.decay);
+    env.connect(masterBus);
+
+    cfg.partials.forEach((p, idx) => {
+      const osc = ac.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = f * p.mult * (1 + idx * 0.0008);
+      const g = ac.createGain();
+      g.gain.value = p.gain;
+      osc.connect(g).connect(env);
+      osc.start(now);
+      osc.stop(now + cfg.decay + 0.5);
+    });
+  }
+
+  // Sustain (rim-rub) — continuous tone with vibrato; returns stop()
+  function playSustain(freq, type) {
+    initAudio();
+    const cfg = glassTypes[type];
+    const ac = audioCtx;
+    const now = ac.currentTime;
+    const f = freq * Math.pow(2, cfg.pitchShift / 12);
+
+    const env = ac.createGain();
+    env.gain.setValueAtTime(0, now);
+    env.gain.linearRampToValueAtTime(0.18, now + 0.25);
+    env.connect(masterBus);
+
+    const lfo = ac.createOscillator();
+    lfo.frequency.value = 5.2;
+    const lfoGain = ac.createGain();
+    lfoGain.gain.value = f * 0.0028; // ~5 cents vibrato
+    lfo.connect(lfoGain);
+    lfo.start(now);
+
+    const oscs = [];
+    cfg.partials.slice(0, 3).forEach((p, idx) => {
+      const osc = ac.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = f * p.mult * (1 + idx * 0.0008);
+      lfoGain.connect(osc.frequency);
+      const g = ac.createGain();
+      g.gain.value = p.gain * 0.9;
+      osc.connect(g).connect(env);
+      osc.start(now);
+      oscs.push(osc);
+    });
+
+    let stopped = false;
+    return function stop() {
+      if (stopped) return;
+      stopped = true;
+      const t = ac.currentTime;
+      env.gain.cancelScheduledValues(t);
+      env.gain.setValueAtTime(env.gain.value, t);
+      env.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+      oscs.forEach(o => o.stop(t + 0.7));
+      lfo.stop(t + 0.7);
+    };
+  }
+
+  /* ============================================================
+     STATE
+     ============================================================ */
+  let currentType = 'wine';
+  let mode = 'play';
+
+  let recording = false;
+  let recordStart = 0;
+  let recordedEvents = [];
+  let looping = false;
+  let loopTimeouts = [];
+
+  const activeSustains = {};
+
+  /* ============================================================
+     DOM REFS
+     ============================================================ */
+  const glassRow      = document.getElementById('glassRow');
+  const tabs          = document.getElementById('tabs');
+  const recordBtn     = document.getElementById('recordBtn');
+  const playBtn       = document.getElementById('playBtn');
+  const clearBtn      = document.getElementById('clearBtn');
+  const volSlider     = document.getElementById('volSlider');
+  const playModeBtn   = document.getElementById('playMode');
+  const tuneModeBtn   = document.getElementById('tuneMode');
+  const hint          = document.getElementById('hint');
+  const aboutBtn      = document.getElementById('aboutBtn');
+  const aboutOverlay  = document.getElementById('aboutOverlay');
+  const aboutClose    = document.getElementById('aboutClose');
+
+  /* ============================================================
+     BUILD GLASSES
+     ============================================================ */
+  function buildGlasses() {
+    glassRow.innerHTML = '';
+    const cfg = glassTypes[currentType];
+    glasses.forEach((g, i) => {
+      const el = document.createElement('div');
+      el.className = `glass ${currentType}`;
+      el.dataset.index = i;
+      el.style.setProperty('--glow', cfg.glow);
+      el.style.setProperty('--glow-soft', cfg.glowSoft);
+      el.style.setProperty('--glow-inner', cfg.glowInner);
+      el.innerHTML = `
+        <div class="freq-label">${Math.round(waterLevelToFreq(g.waterLevel))} Hz</div>
+        <div class="bowl"><div class="water" style="height:${g.waterLevel}%"></div></div>
+        <div class="stem"></div>
+        <div class="base"></div>
+        <div class="key-label">${g.key}</div>
+      `;
+      glassRow.appendChild(el);
+    });
+  }
+
+  /* ============================================================
+     INTERACTIONS — orbs, notes, tuning, glissando
+     ============================================================ */
+  function spawnBlinkOrb(rect, color) {
+    const orb = document.createElement('div');
+    orb.className = 'blink-orb';
+    orb.style.left = (rect.left + rect.width / 2 - 3) + 'px';
+    orb.style.top  = (rect.top + 20) + 'px';
+    if (color) {
+      orb.style.background = color;
+      orb.style.boxShadow = `0 0 20px 4px ${color}`;
+    }
+    document.body.appendChild(orb);
+    setTimeout(() => orb.remove(), 2000);
+  }
+
+  function startNote(i) {
+    const g = glasses[i];
+    const freq = waterLevelToFreq(g.waterLevel);
+    playTap(freq, currentType);
+    const stopSustain = playSustain(freq, currentType);
+    activeSustains[i] = stopSustain;
+
+    const el = glassRow.children[i];
+    if (el) {
+      el.classList.add('playing');
+      spawnBlinkOrb(el.getBoundingClientRect(), glassTypes[currentType].orbColor);
+      setTimeout(() => el.classList.remove('playing'), 700);
+    }
+
+    if (recording) {
+      recordedEvents.push({
+        type: 'start', index: i, glassType: currentType, freq,
+        time: performance.now() - recordStart
+      });
+    }
+  }
+
+  function endNote(i) {
+    if (activeSustains[i]) {
+      activeSustains[i]();
+      delete activeSustains[i];
+      if (recording) {
+        recordedEvents.push({ type: 'end', index: i, time: performance.now() - recordStart });
+      }
+    }
+  }
+
+  function endAllNotes() {
+    Object.keys(activeSustains).forEach(k => {
+      activeSustains[k]();
+      delete activeSustains[k];
+    });
+  }
+
+  // Tune mode water dragging
+  let tuningGlass = null;
+  let tuneStartY = 0;
+  let tuneStartLevel = 0;
+
+  function onPointerDown(e, idx) {
+    if (mode === 'tune') {
+      tuningGlass = idx;
+      tuneStartY = e.clientY;
+      tuneStartLevel = glasses[idx].waterLevel;
+      e.preventDefault();
+      return;
+    }
+    startNote(idx);
+    e.preventDefault();
+  }
+
+  function onPointerMove(e) {
+    if (mode === 'tune' && tuningGlass !== null) {
+      const dy = e.clientY - tuneStartY;
+      const newLevel = Math.max(2, Math.min(98, tuneStartLevel + dy * 0.4));
+      glasses[tuningGlass].waterLevel = newLevel;
+      const el = glassRow.children[tuningGlass];
+      if (el) {
+        const water = el.querySelector('.water');
+        if (water) water.style.height = newLevel + '%';
+        const lbl = el.querySelector('.freq-label');
+        if (lbl) lbl.textContent = `${Math.round(waterLevelToFreq(newLevel))} Hz`;
+      }
+      return;
+    }
+
+    if (mode === 'play') {
+      // Glissando: while a note is held, sweeping over a new glass triggers it
+      if (Object.keys(activeSustains).length === 0) return;
+      const target = document.elementFromPoint(e.clientX, e.clientY);
+      if (!target) return;
+      const glassEl = target.closest('.glass');
+      if (!glassEl) return;
+      const idx = parseInt(glassEl.dataset.index, 10);
+      if (isNaN(idx)) return;
+      if (activeSustains[idx]) return;
+      startNote(idx);
+    }
+  }
+
+  function onPointerUp() {
+    if (mode === 'tune') { tuningGlass = null; return; }
+    endAllNotes();
+  }
+
+  glassRow.addEventListener('pointerdown', (e) => {
+    const glassEl = e.target.closest('.glass');
+    if (!glassEl) return;
+    const idx = parseInt(glassEl.dataset.index, 10);
+    if (isNaN(idx)) return;
+    onPointerDown(e, idx);
+  });
+  document.addEventListener('pointermove', onPointerMove);
+  document.addEventListener('pointerup', onPointerUp);
+  document.addEventListener('pointercancel', onPointerUp);
+
+  // Keyboard
+  const keysDown = {};
+  document.addEventListener('keydown', (e) => {
+    if (e.repeat) return;
+    const k = e.key.toUpperCase();
+    const idx = keys.indexOf(k);
+    if (idx === -1) return;
+    if (keysDown[idx]) return;
+    keysDown[idx] = true;
+    e.preventDefault();
+    startNote(idx);
+  });
+  document.addEventListener('keyup', (e) => {
+    const k = e.key.toUpperCase();
+    const idx = keys.indexOf(k);
+    if (idx === -1) return;
+    keysDown[idx] = false;
+    endNote(idx);
+  });
+
+  /* ============================================================
+     TABS / MODE / RECORDING / VOLUME / ABOUT
+     ============================================================ */
+  tabs.addEventListener('click', (e) => {
+    const t = e.target.closest('.tab');
+    if (!t) return;
+    tabs.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    currentType = t.dataset.type;
+    endAllNotes();
+    buildGlasses();
+  });
+
+  function setMode(m) {
+    mode = m;
+    document.body.classList.toggle('tune-mode', mode === 'tune');
+    playModeBtn.classList.toggle('active', mode === 'play');
+    tuneModeBtn.classList.toggle('active', mode === 'tune');
+    hint.textContent = (mode === 'tune')
+      ? 'drag a glass up or down to change its water level'
+      : 'tap a glass · hold to ring · drag across to glissando · keys A–K';
+    endAllNotes();
+  }
+  playModeBtn.addEventListener('click', () => setMode('play'));
+  tuneModeBtn.addEventListener('click', () => setMode('tune'));
+
+  recordBtn.addEventListener('click', () => {
+    initAudio();
+    if (!recording) {
+      recordedEvents = [];
+      recording = true;
+      recordStart = performance.now();
+      recordBtn.classList.add('recording');
+      recordBtn.textContent = 'Stop';
+    } else {
+      recording = false;
+      recordBtn.classList.remove('recording');
+      recordBtn.textContent = 'Record';
+    }
+  });
+
+  playBtn.addEventListener('click', () => {
+    if (looping) {
+      looping = false;
+      loopTimeouts.forEach(t => clearTimeout(t));
+      loopTimeouts = [];
+      endAllNotes();
+      playBtn.classList.remove('looping');
+      playBtn.textContent = 'Play Loop';
+      return;
+    }
+    if (recordedEvents.length === 0) return;
+    looping = true;
+    playBtn.classList.add('looping');
+    playBtn.textContent = 'Stop Loop';
+
+    function playLoop() {
+      if (!looping) return;
+      const last = recordedEvents[recordedEvents.length - 1];
+      const totalDur = last.time + 1200;
+      const liveStops = {};
+
+      recordedEvents.forEach(ev => {
+        const t = setTimeout(() => {
+          if (!looping) return;
+          if (ev.type === 'start') {
+            const cfg = glassTypes[ev.glassType] || glassTypes[currentType];
+            playTap(ev.freq, ev.glassType);
+            const stop = playSustain(ev.freq, ev.glassType);
+            liveStops[ev.index] = stop;
+            if (ev.glassType === currentType) {
+              const el = glassRow.children[ev.index];
+              if (el) {
+                el.classList.add('playing');
+                spawnBlinkOrb(el.getBoundingClientRect(), cfg.orbColor);
+                setTimeout(() => el.classList.remove('playing'), 700);
+              }
+            }
+          } else if (ev.type === 'end') {
+            if (liveStops[ev.index]) {
+              liveStops[ev.index]();
+              delete liveStops[ev.index];
+            }
+          }
+        }, ev.time);
+        loopTimeouts.push(t);
+      });
+      const t = setTimeout(playLoop, totalDur);
+      loopTimeouts.push(t);
+    }
+    playLoop();
+  });
+
+  clearBtn.addEventListener('click', () => {
+    recordedEvents = [];
+    looping = false;
+    loopTimeouts.forEach(t => clearTimeout(t));
+    loopTimeouts = [];
+    endAllNotes();
+    playBtn.classList.remove('looping');
+    playBtn.textContent = 'Play Loop';
+    if (recording) {
+      recording = false;
+      recordBtn.classList.remove('recording');
+      recordBtn.textContent = 'Record';
+    }
+  });
+
+  volSlider.addEventListener('input', () => {
+    masterVolume = parseInt(volSlider.value, 10) / 100;
+    if (masterBus) masterBus.gain.setValueAtTime(masterVolume, audioCtx.currentTime);
+  });
+
+  // About panel
+  aboutBtn.addEventListener('click', () => aboutOverlay.classList.add('open'));
+  aboutClose.addEventListener('click', () => aboutOverlay.classList.remove('open'));
+  aboutOverlay.addEventListener('click', (e) => {
+    if (e.target === aboutOverlay) aboutOverlay.classList.remove('open');
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') aboutOverlay.classList.remove('open');
+  });
+
+  /* ============================================================
+     STARFIELD
+     ============================================================ */
+  const starsEl = document.getElementById('stars');
+  for (let i = 0; i < 60; i++) {
+    const s = document.createElement('span');
+    s.style.left = Math.random() * 100 + '%';
+    s.style.top  = Math.random() * 100 + '%';
+    s.style.animationDelay = (Math.random() * 3) + 's';
+    s.style.opacity = 0.3 + Math.random() * 0.6;
+    starsEl.appendChild(s);
+  }
+
+  // Initial render
+  buildGlasses();
+</script>
+</body>
+</html>
+
+
+
+
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
